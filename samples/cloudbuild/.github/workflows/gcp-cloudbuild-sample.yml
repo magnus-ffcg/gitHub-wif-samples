@@ -1,0 +1,44 @@
+name: GCP Cloud Build Workflow
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: 'read'
+  id-token: 'write'
+
+env:
+  PROJECT_ID: your-project-id
+  REGION: europe-west1
+  REPO_NAME: ${{ github.event.repository.name }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Google Auth
+      id: auth
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: 'projects/123456789/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+        service_account: 'github-actions@${{ env.PROJECT_ID }}.iam.gserviceaccount.com'
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Trigger Cloud Build
+      run: |
+        cd cloudbuild
+        gcloud builds submit --config=cloudbuild.yaml \
+          --substitutions=_REPO_NAME=$REPO_NAME,_BRANCH_NAME=${{ github.ref_name }} \
+          --project=${{ env.PROJECT_ID }} \
+          --region=${{ env.REGION }} \
+          --impersonate-service-account=cloudbuild-sa@${{ env.PROJECT_ID }}.iam.gserviceaccount.com

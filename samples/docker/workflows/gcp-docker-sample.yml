@@ -1,0 +1,56 @@
+name: Build and Push Docker Image to Artifact Registry
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: your-project-id
+  REGION: europe-west1
+  REPOSITORY: my-app    # Artifact Registry repository name
+  IMAGE_NAME: my-app    # Docker image name
+  REGISTRY: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}
+
+permissions:
+  contents: 'read'
+  id-token: 'write'
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Google Auth
+      id: auth
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: '${{ secrets.WIF_PROVIDER }}'
+        service_account: 'github-actions@${{ env.PROJECT_ID }}.iam.gserviceaccount.com'
+
+    - name: Get Docker credentials
+      run: |
+        # Get token and authenticate to Artifact Registry
+        gcloud auth print-access-token --impersonate-service-account=docker-sa@${{ env.PROJECT_ID }}.iam.gserviceaccount.com | \
+        docker login -u oauth2accesstoken --password-stdin ${{ env.REGION }}-docker.pkg.dev
+
+    - name: Build Docker image
+      run: |
+        cd docker
+        # Build with multiple tags
+        docker build \
+          --tag "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}" \
+          --tag "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" \
+          --build-arg PROJECT_ID=${{ env.PROJECT_ID }} \
+          --build-arg REGION=${{ env.REGION }} \
+          .
+
+    - name: Push Docker image
+      run: |
+        # Push all tags
+        docker push --all-tags "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"

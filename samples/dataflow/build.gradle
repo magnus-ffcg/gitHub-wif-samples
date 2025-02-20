@@ -1,0 +1,79 @@
+plugins {
+    id 'java'
+    id 'maven-publish'
+    id 'com.google.cloud.tools.jib' version '3.4.0'  // Optional: for container builds
+}
+
+group = System.getenv('GROUP_ID') ?: 'com.example'
+version = project.hasProperty('version') ? project.getProperty('version') : '1.0.0-SNAPSHOT'
+
+repositories {
+    mavenCentral()
+    // Add Google's Maven repository for Dataflow dependencies
+    maven {
+        url "https://packages.cloud.google.com/maven2"
+    }
+}
+
+dependencies {
+    implementation platform('com.google.cloud.dataflow:google-cloud-dataflow-java-sdk-bom:2.50.0')
+    implementation 'org.apache.beam:beam-runners-google-cloud-dataflow-java'
+    implementation 'org.apache.beam:beam-sdks-java-core'
+    implementation 'org.slf4j:slf4j-api:2.0.9'
+    
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.apache.beam:beam-runners-direct-java'
+}
+
+// Create a fat JAR with all dependencies
+jar {
+    manifest {
+        attributes 'Main-Class': 'com.example.dataflow.MainClass'
+    }
+    
+    // Include all dependencies in the JAR
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+// Configure publishing to Artifact Registry
+publishing {
+    publications {
+        mavenJar(MavenPublication) {
+            from components.java
+            
+            // Optional: Customize artifact names
+            artifactId = System.getenv('ARTIFACT_ID') ?: 'dataflow-job'
+            
+            // Optional: Add source and javadoc JARs
+            /*
+            artifact sourceJar
+            artifact javadocJar
+            */
+        }
+    }
+    
+    repositories {
+        maven {
+            url = project.hasProperty('mavenUrl') ? project.getProperty('mavenUrl') : 
+                  'https://maven.pkg.dev/your-project/your-repository'
+            
+            credentials {
+                username = findProperty('artifactRegistryUsername') ?: 'oauth2accesstoken'
+                password = findProperty('artifactRegistryPassword') ?: ''
+            }
+        }
+    }
+}
+
+// Task to set version from command line
+task setVersion {
+    doLast {
+        if (project.hasProperty('version')) {
+            project.version = project.getProperty('version')
+        }
+    }
+}

@@ -1,0 +1,88 @@
+name: Build and Deploy Dataflow Job
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: your-project-id
+  REGION: europe-west1
+  REPOSITORY: maven-repo     # Artifact Registry repository name
+  GROUP_ID: com.example     # Your project's group ID
+  ARTIFACT_ID: dataflow-job # Your project's artifact ID
+  JAVA_VERSION: 11
+
+permissions:
+  contents: 'read'
+  id-token: 'write'
+
+jobs:
+  build-and-upload:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up JDK
+      uses: actions/setup-java@v3
+      with:
+        java-version: ${{ env.JAVA_VERSION }}
+        distribution: 'temurin'
+
+    - name: Setup Gradle
+      uses: gradle/gradle-build-action@v2
+      with:
+        gradle-version: wrapper
+
+    - name: Google Auth
+      id: auth
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: '${{ secrets.WIF_PROVIDER }}'
+        service_account: 'github-actions@${{ env.PROJECT_ID }}.iam.gserviceaccount.com'
+
+    - name: Configure Gradle for Artifact Registry
+      run: |
+        # Get token for Artifact Registry
+        ACCESS_TOKEN=$(gcloud auth print-access-token --impersonate-service-account=dataflow-sa@${{ env.PROJECT_ID }}.iam.gserviceaccount.com)
+        
+        # Create gradle.properties with Artifact Registry configuration
+        cat > ~/.gradle/gradle.properties << EOF
+        artifactRegistryMavenRepo=https://${{ env.REGION }}-maven.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}
+        artifactRegistryUsername=oauth2accesstoken
+        artifactRegistryPassword=${ACCESS_TOKEN}
+        EOF
+
+    - name: Build and Publish with Gradle
+      run: |
+        cd dataflow
+        # Set version to git SHA
+        ./gradlew :setVersion -Pversion=${{ github.sha }}
+        
+        # Build and publish to Artifact Registry
+        ./gradlew clean build publish \
+          -x test \
+          -PmavenUrl=https://${{ env.REGION }}-maven.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}
+
+    # Optional trigger an deploy
+
+    - name: Launch Dataflow Job
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      run: |
+        ARTIFACT_PATH="${{ env.GROUP_ID }}/${{ env.ARTIFACT_ID }}/${{ github.sha }}/${{ env.ARTIFACT_ID }}-${{ github.sha }}.jar"
+        JAR_URL="https://${{ env.REGION }}-maven.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${ARTIFACT_PATH}"
+        
+        gcloud dataflow jobs run ${{ env.ARTIFACT_ID }}-${{ github.sha }} \
+          --gcs-location=${JAR_URL} \
+          --project=${{ env.PROJECT_ID }} \
+          --region=${{ env.REGION }} \
+          --service-account-email=dataflow-runner-sa@${{ env.PROJECT_ID }}.iam.gserviceaccount.com \
+          --temp-location=gs://dataflow-temp-${{ env.PROJECT_ID }}/temp \
+          --staging-location=gs://dataflow-temp-${{ env.PROJECT_ID }}/staging \
+          --network=default \
+          --subnetwork=regions/${{ env.REGION }}/subnetworks/default \
+          --impersonate-service-account=dataflow-sa@${{ env.PROJECT_ID }}.iam.gserviceaccount.com \

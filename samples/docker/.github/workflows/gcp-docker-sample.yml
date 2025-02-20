@@ -1,0 +1,50 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: your-project-id
+  REGION: europe-west1
+  REPOSITORY: my-app
+  IMAGE_NAME: my-app
+
+permissions:
+  contents: 'read'
+  id-token: 'write'
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Google Auth
+      id: auth
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: 'projects/123456789/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+        service_account: 'github-actions@${{ env.PROJECT_ID }}.iam.gserviceaccount.com'
+
+    - name: Configure Docker for GCR
+      run: |
+        gcloud auth print-access-token --impersonate-service-account=docker-sa@${{ env.PROJECT_ID }}.iam.gserviceaccount.com | docker login -u oauth2accesstoken --password-stdin ${{ env.REGION }}-docker.pkg.dev
+
+    - name: Build Docker image
+      run: |
+        cd docker
+        docker build \
+          --tag "${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}" \
+          --tag "${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:latest" \
+          .
+
+    - name: Push Docker image
+      run: |
+        docker push "${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+        docker push "${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:latest"

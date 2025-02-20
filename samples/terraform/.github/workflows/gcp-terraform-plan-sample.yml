@@ -1,0 +1,105 @@
+name: Terraform Plan
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: 'read'
+  id-token: 'write'
+  pull-requests: 'write'  # Needed to comment on PR
+
+env:
+  PROJECT_ID: your-project-id
+  REGION: europe-west1
+
+jobs:
+  terraform-plan:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Google Auth
+      id: auth
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: 'projects/123456789/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+        service_account: 'github-actions@${{ env.PROJECT_ID }}.iam.gserviceaccount.com'
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: "1.5.0"
+
+    - name: Terraform fmt
+      id: fmt
+      run: |
+        cd terraform
+        terraform fmt -check -recursive
+      continue-on-error: true
+
+    - name: Terraform Init
+      id: init
+      run: |
+        cd terraform
+        terraform init \
+          -backend-config="env/dev.config"
+
+    - name: Terraform Validate
+      id: validate
+      run: |
+        cd terraform
+        terraform validate -no-color
+
+    - name: Terraform Plan
+      id: plan
+      run: |
+        cd terraform
+        terraform plan -no-color \
+          -var="project_id=${{ env.PROJECT_ID }}" \
+          -var="region=${{ env.REGION }}" \
+          -var-file="env/dev.tfvars" \
+          -out=tfplan
+
+    - name: Generate Plan Output
+      run: |
+        cd terraform
+        terraform show -no-color tfplan > tfplan.txt
+
+    - name: Add Plan Comment
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v6
+      env:
+        PLAN: "${{ steps.plan.outputs.stdout }}"
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const fs = require('fs');
+          const plan = fs.readFileSync('terraform/tfplan.txt', 'utf8');
+          const maxGitHubBodyLength = 65536;
+          
+          let body = `#### Terraform Format and Style 🖌\`${{ steps.fmt.outcome }}\`
+          #### Terraform Initialization ⚙️\`${{ steps.init.outcome }}\`
+          #### Terraform Validation 🤖\`${{ steps.validate.outcome }}\`
+          <details><summary>Show Plan</summary>
+          
+          \`\`\`\n
+          ${plan}
+          \`\`\`
+          
+          </details>`;
+          
+          // Truncate the body if it's too long for GitHub
+          if (body.length > maxGitHubBodyLength) {
+            body = body.substring(0, maxGitHubBodyLength - 3) + '...';
+          }
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: body
+          })
